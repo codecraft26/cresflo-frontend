@@ -1,4 +1,5 @@
 import type {
+  AdvisorConversation,
   ApiEnvelope,
   OrganizationDocumentIngestionJobRecord,
   OrganizationDocumentRecord,
@@ -264,6 +265,15 @@ const getOrganizationProfile = async (baseUrl: string, token: string) => {
   return parseJson<OrganizationProfile>(response);
 };
 
+const listAdvisorConversations = async (baseUrl: string, token: string) => {
+  const response = await fetch(`${baseUrl}/api/advisor/conversations`, {
+    method: "GET",
+    headers: createHeaders(token),
+  });
+
+  return parseJson<AdvisorConversation[]>(response);
+};
+
 const listOwnOrganizationDocuments = async (baseUrl: string, token: string) => {
   const response = await fetch(`${baseUrl}/api/organization/documents`, {
     method: "GET",
@@ -374,6 +384,7 @@ export {
   ingestOrganizationPdfDocument,
   ingestOwnOrganizationDocument,
   ingestOwnOrganizationPdfDocument,
+  listAdvisorConversations,
   listOrganizations,
   listOrganizationDocumentIngestionJobs,
   listOrganizationDocuments,

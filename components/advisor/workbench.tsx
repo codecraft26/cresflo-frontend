@@ -35,6 +35,7 @@ import {
   ingestOrganizationPdfDocument,
   ingestOwnOrganizationDocument,
   ingestOwnOrganizationPdfDocument,
+  listAdvisorConversations,
   listOrganizationDocumentIngestionJobs,
   listOrganizationDocuments,
   listOrganizations,
@@ -77,6 +78,27 @@ const defaultBackendUrl =
 const subscribeToHydration = () => () => undefined;
 const getClientHydrationSnapshot = () => true;
 const getServerHydrationSnapshot = () => false;
+
+const isOrganizationTokenExpired = (token: string) => {
+  try {
+    const encodedPayload = token.split(".")[0];
+
+    if (!encodedPayload) {
+      return true;
+    }
+
+    const normalizedPayload = encodedPayload.replace(/-/g, "+").replace(/_/g, "/");
+    const paddedPayload = normalizedPayload.padEnd(
+      Math.ceil(normalizedPayload.length / 4) * 4,
+      "=",
+    );
+    const payload = JSON.parse(window.atob(paddedPayload)) as { exp?: number };
+
+    return typeof payload.exp !== "number" || payload.exp <= Math.floor(Date.now() / 1000);
+  } catch {
+    return true;
+  }
+};
 
 const sectionConfig = {
   overview: {
@@ -163,7 +185,11 @@ type DashboardContextValue = {
   documentFile: File | null;
   documentSixMonthExtensionAllowed: boolean;
   conversation: AdvisorConversation | null;
+  conversationHistory: AdvisorConversation[];
+  isConversationHistoryLoading: boolean;
   chatMessage: string;
+  pendingChatMessage: string;
+  chatActivity: string | null;
   streamedAnswer: string;
   lastAnswer: AdvisorAnswer | null;
   lastProvider: string | null;
@@ -200,6 +226,8 @@ type DashboardContextValue = {
   setDocumentFile: (value: File | null) => void;
   setDocumentSixMonthExtensionAllowed: (value: boolean) => void;
   setChatMessage: (value: string) => void;
+  setPendingChatMessage: (value: string) => void;
+  setChatActivity: (value: string | null) => void;
   setStreamedAnswer: (value: string) => void;
   setLastAnswer: (value: AdvisorAnswer | null) => void;
   setActiveRole: (role: DashboardRole | null) => void;
@@ -214,6 +242,7 @@ type DashboardContextValue = {
   refreshDocumentJobs: (token: string, organizationId: string) => Promise<void>;
   refreshOwnOrganizationDocuments: (token: string) => Promise<void>;
   refreshOwnDocumentJobs: (token: string) => Promise<void>;
+  refreshConversationHistory: (token: string) => Promise<void>;
   startJobPolling: (
     token: string,
     organizationId: string,
@@ -316,7 +345,11 @@ function DashboardProvider({
   const [documentSixMonthExtensionAllowed, setDocumentSixMonthExtensionAllowed] =
     useState(false);
   const [conversation, setConversation] = useState<AdvisorConversation | null>(null);
+  const [conversationHistory, setConversationHistory] = useState<AdvisorConversation[]>([]);
+  const [isConversationHistoryLoading, setIsConversationHistoryLoading] = useState(false);
   const [chatMessage, setChatMessage] = useState("");
+  const [pendingChatMessage, setPendingChatMessage] = useState("");
+  const [chatActivity, setChatActivity] = useState<string | null>(null);
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const [lastAnswer, setLastAnswer] = useState<AdvisorAnswer | null>(null);
   const [lastProvider, setLastProvider] = useState<string | null>(null);
@@ -391,6 +424,17 @@ function DashboardProvider({
 
       return items.find((item) => item.id === current.id) ?? null;
     });
+  };
+
+  const refreshConversationHistory = async (token: string) => {
+    setIsConversationHistoryLoading(true);
+
+    try {
+      const items = await listAdvisorConversations(backendUrl, token);
+      setConversationHistory(items);
+    } finally {
+      setIsConversationHistoryLoading(false);
+    }
   };
 
   const stopJobPolling = () => {
@@ -472,43 +516,86 @@ function DashboardProvider({
     switch (event.type) {
       case "connected":
         setConnectionState("Connected");
+        setErrorMessage("");
         appendLog(`Socket connected for ${event.user.email}`);
         break;
       case "conversation_created":
         setConversation(event.conversation);
+        setConversationHistory((current) => [
+          event.conversation,
+          ...current.filter((item) => item.id !== event.conversation.id),
+        ]);
         setStreamedAnswer("");
+        setLastAnswer(null);
+        setChatActivity(null);
         appendLog(`Conversation ${event.conversation.id} created`);
         break;
       case "conversation_loaded":
         setConversation(event.conversation);
+        setConversationHistory((current) => [
+          event.conversation,
+          ...current.filter((item) => item.id !== event.conversation.id),
+        ]);
+        setStreamedAnswer("");
+        setLastAnswer(null);
+        setPendingChatMessage("");
+        setChatActivity(null);
         appendLog(`Conversation ${event.conversation.id} loaded`);
         break;
       case "planning_started":
         setStreamedAnswer("");
+        setChatActivity("Understanding your request");
         appendLog(`Planning started for ${event.conversationId}`);
         break;
       case "plan_ready":
+        setChatActivity(
+          event.planKind === "document-check"
+            ? "Searching organization documents"
+            : event.planKind === "portfolio-search" || event.planKind === "portfolio-breakdown"
+              ? "Checking trusted portfolio data"
+              : "Running the trusted advisor capability",
+        );
         appendLog(`Planner chose ${event.planKind}`);
         break;
       case "message_chunk":
+        setChatActivity("Writing a grounded answer");
         setStreamedAnswer((current) => current + event.chunk);
         break;
       case "message_complete":
         setConversation(event.conversation);
-        setStreamedAnswer(event.answer.summary);
+        setConversationHistory((current) => [
+          event.conversation,
+          ...current.filter((item) => item.id !== event.conversation.id),
+        ]);
+        setStreamedAnswer(event.message || event.answer.summary);
         setLastAnswer(event.answer);
         setLastProvider(event.provider);
+        setPendingChatMessage("");
+        setChatActivity(null);
         appendLog(`Completed message with ${event.provider}`);
         break;
       case "error":
+        setPendingChatMessage("");
+        setChatActivity(null);
         setErrorMessage(event.message);
+        if (event.message.toLowerCase().includes("token")) {
+          setConnectionState("Session expired");
+        }
         appendLog(`Socket error: ${event.message}`);
         break;
     }
   };
 
   const connectSocket = async (session: OrganizationSession) => {
-    socketRef.current?.close();
+    const previousSocket = socketRef.current;
+    socketRef.current = null;
+    previousSocket?.close();
+
+    if (isOrganizationTokenExpired(session.accessToken)) {
+      setConnectionState("Session expired");
+      setErrorMessage("Your organization session has expired. Sign in again to use advisor chat.");
+      return;
+    }
 
     const wsUrl = backendUrl.replace("http://", "ws://").replace("https://", "wss://");
     const socket = new WebSocket(
@@ -516,25 +603,50 @@ function DashboardProvider({
     );
 
     setConnectionState("Connecting");
+    setErrorMessage("");
     socketRef.current = socket;
 
     socket.onopen = () => {
+      if (socketRef.current !== socket) {
+        socket.close();
+        return;
+      }
+
       appendLog("WebSocket opened");
     };
 
     socket.onmessage = (messageEvent) => {
+      if (socketRef.current !== socket) {
+        return;
+      }
+
       const payload = JSON.parse(messageEvent.data) as AdvisorSocketEvent;
       handleSocketEvent(payload);
     };
 
     socket.onclose = () => {
+      if (socketRef.current !== socket) {
+        return;
+      }
+
+      socketRef.current = null;
       setConnectionState("Disconnected");
+      setPendingChatMessage("");
+      setChatActivity(null);
       appendLog("WebSocket closed");
     };
 
     socket.onerror = () => {
+      if (socketRef.current !== socket) {
+        return;
+      }
+
       setConnectionState("Error");
-      setErrorMessage("WebSocket connection failed.");
+      setPendingChatMessage("");
+      setChatActivity(null);
+      setErrorMessage(
+        `Could not connect to advisor streaming at ${wsUrl}/ws/advisor. Check that the backend is running and try reconnecting.`,
+      );
     };
   };
 
@@ -624,6 +736,11 @@ function DashboardProvider({
 
     queueMicrotask(() => {
       void connectSocket(organizationSession);
+      void refreshConversationHistory(organizationSession.accessToken).catch((error) => {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Could not load conversation history.",
+        );
+      });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [organizationSession?.accessToken]);
@@ -649,9 +766,12 @@ function DashboardProvider({
     setOrganizationSession(null);
     setOrganizationProfile(null);
     setConversation(null);
+    setConversationHistory([]);
     setLastAnswer(null);
     setLastProvider(null);
     setStreamedAnswer("");
+    setPendingChatMessage("");
+    setChatActivity(null);
     setConnectionState("Disconnected");
     if (!superadminSession) {
       setActiveRole(null);
@@ -709,7 +829,11 @@ function DashboardProvider({
     documentFile,
     documentSixMonthExtensionAllowed,
     conversation,
+    conversationHistory,
+    isConversationHistoryLoading,
     chatMessage,
+    pendingChatMessage,
+    chatActivity,
     streamedAnswer,
     lastAnswer,
     lastProvider,
@@ -744,6 +868,8 @@ function DashboardProvider({
     setDocumentFile,
     setDocumentSixMonthExtensionAllowed,
     setChatMessage,
+    setPendingChatMessage,
+    setChatActivity,
     setStreamedAnswer,
     setLastAnswer,
     setActiveRole,
@@ -758,6 +884,7 @@ function DashboardProvider({
     refreshDocumentJobs,
     refreshOwnOrganizationDocuments,
     refreshOwnDocumentJobs,
+    refreshConversationHistory,
     startJobPolling,
     connectSocket,
     sendSocketMessage,
@@ -1558,14 +1685,6 @@ function DashboardDocumentsPage() {
   }
 
   return (
-    <DashboardSection
-      title="Documents"
-      description={
-        isSuperadminView
-          ? "Upload and track organization knowledge that the advisor can retrieve later."
-          : "Upload PDFs and text documents for your organization so advisor responses can use RAG against tenant-scoped knowledge."
-      }
-    >
       <DocumentIngestionPanel
         organizations={availableOrganizations}
         selectedOrganizationId={effectiveOrganizationId}
@@ -1601,9 +1720,17 @@ function DashboardDocumentsPage() {
         onFormChange={(field, value) => {
           if (field === "title") setDocumentTitle(value as string);
           if (field === "type") {
-            setDocumentType(
-              value as "loan_agreement" | "policy" | "servicing_procedure" | "general",
-            );
+            const nextType = value as
+              | "loan_agreement"
+              | "policy"
+              | "servicing_procedure"
+              | "general";
+            setDocumentType(nextType);
+
+            if (nextType !== "loan_agreement") {
+              setDocumentLoanId("");
+              setDocumentSixMonthExtensionAllowed(false);
+            }
           }
           if (field === "loanId") setDocumentLoanId(value as string);
           if (field === "summary") setDocumentSummary(value as string);
@@ -1758,22 +1885,27 @@ function DashboardDocumentsPage() {
         }}
         onPdfSelect={setDocumentFile}
       />
-    </DashboardSection>
   );
 }
 
 function DashboardAdvisorChatPage() {
   const {
+    chatActivity,
     conversation,
+    conversationHistory,
     connectionState,
+    isConversationHistoryLoading,
     isOrganizationView,
     lastAnswer,
     lastProvider,
     organizationSession,
+    pendingChatMessage,
     sendSocketMessage,
     setChatMessage,
     setErrorMessage,
+    setChatActivity,
     setLastAnswer,
+    setPendingChatMessage,
     setStreamedAnswer,
     streamedAnswer,
     chatMessage,
@@ -1791,22 +1923,25 @@ function DashboardAdvisorChatPage() {
   }
 
   return (
-    <DashboardSection
-      title="Advisor Chat"
-      description="Create conversations, stream grounded answers, and review the evidence behind them."
-    >
       <AdvisorChatPanel
         session={organizationSession}
         connectionState={connectionState}
         conversation={conversation}
+        conversationHistory={conversationHistory}
+        isConversationHistoryLoading={isConversationHistoryLoading}
         chatMessage={chatMessage}
+        pendingChatMessage={pendingChatMessage}
+        activityLabel={chatActivity}
         streamedAnswer={streamedAnswer}
         lastAnswer={lastAnswer}
         lastProvider={lastProvider}
         onCreateConversation={() => {
           try {
+            setChatActivity("Starting a new conversation");
+            setPendingChatMessage("");
             sendSocketMessage({ type: "create_conversation" });
           } catch (error) {
+            setChatActivity(null);
             setErrorMessage(
               error instanceof Error ? error.message : "Could not create conversation.",
             );
@@ -1825,21 +1960,42 @@ function DashboardAdvisorChatPage() {
           }
 
           try {
+            const message = chatMessage.trim();
             setStreamedAnswer("");
             setLastAnswer(null);
+            setPendingChatMessage(message);
+            setChatActivity("Sending your message");
             sendSocketMessage({
               type: "send_message",
               conversationId: conversation.id,
-              message: chatMessage,
+              message,
             });
             setChatMessage("");
           } catch (error) {
+            setPendingChatMessage("");
+            setChatActivity(null);
             setErrorMessage(
               error instanceof Error ? error.message : "Could not send message.",
             );
           }
         }}
         onApplyPrompt={setChatMessage}
+        onSelectConversation={(conversationId) => {
+          try {
+            setChatActivity("Opening conversation");
+            setPendingChatMessage("");
+            setLastAnswer(null);
+            sendSocketMessage({
+              type: "get_conversation",
+              conversationId,
+            });
+          } catch (error) {
+            setChatActivity(null);
+            setErrorMessage(
+              error instanceof Error ? error.message : "Could not open conversation.",
+            );
+          }
+        }}
         onLoadConversation={() => {
           if (!conversation) {
             setErrorMessage("Create a conversation first.");
@@ -1847,18 +2003,19 @@ function DashboardAdvisorChatPage() {
           }
 
           try {
+            setChatActivity("Reloading conversation");
             sendSocketMessage({
               type: "get_conversation",
               conversationId: conversation.id,
             });
           } catch (error) {
+            setChatActivity(null);
             setErrorMessage(
               error instanceof Error ? error.message : "Could not reload conversation.",
             );
           }
         }}
       />
-    </DashboardSection>
   );
 }
 

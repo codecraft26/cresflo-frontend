@@ -165,6 +165,7 @@ export type AdvisorSocketEvent =
       type: "message_complete";
       conversationId: string;
       answer: AdvisorAnswer;
+      message: string;
       conversation: AdvisorConversation;
       provider: string;
     }
