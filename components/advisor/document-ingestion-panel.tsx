@@ -1,3 +1,5 @@
+import { useMemo, useState } from "react";
+
 import { StepCard } from "@/components/advisor/step-card";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -10,6 +12,14 @@ import type {
   OrganizationDocumentRecord,
   OrganizationRecord,
 } from "@/lib/types";
+
+const documentTypeFilters = [
+  { value: "all", label: "All types" },
+  { value: "policy", label: "policy" },
+  { value: "servicing_procedure", label: "servicing_procedure" },
+  { value: "loan_agreement", label: "loan_agreement" },
+  { value: "general", label: "general" },
+] as const;
 
 function DocumentIngestionPanel({
   organizations,
@@ -65,6 +75,25 @@ function DocumentIngestionPanel({
 }) {
   const activeProgress = activeJob?.progressPercentage ?? 0;
   const isLoanAgreement = form.type === "loan_agreement";
+
+  const [documentSearch, setDocumentSearch] = useState("");
+  const [documentTypeFilter, setDocumentTypeFilter] =
+    useState<(typeof documentTypeFilters)[number]["value"]>("all");
+
+  const filteredDocuments = useMemo(() => {
+    const normalizedQuery = documentSearch.trim().toLowerCase();
+
+    return documents.filter((document) => {
+      const matchesType =
+        documentTypeFilter === "all" || document.type === documentTypeFilter;
+      const matchesQuery =
+        !normalizedQuery ||
+        document.title.toLowerCase().includes(normalizedQuery) ||
+        document.summary.toLowerCase().includes(normalizedQuery);
+
+      return matchesType && matchesQuery;
+    });
+  }, [documents, documentSearch, documentTypeFilter]);
 
   return (
     <StepCard
@@ -268,36 +297,76 @@ function DocumentIngestionPanel({
         <div className={`space-y-3 ${ingestionJobs.length === 0 ? "lg:col-span-2" : ""}`}>
           <div className="flex items-center justify-between">
             <p className="text-sm font-bold text-[var(--ink)]">Knowledge library</p>
-            <span className="text-xs text-[var(--ink-muted)]">{documents.length} documents</span>
+            <span className="text-xs text-[var(--ink-muted)]">
+              {filteredDocuments.length === documents.length
+                ? `${documents.length} documents`
+                : `${filteredDocuments.length} of ${documents.length} documents`}
+            </span>
           </div>
-          <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-          {documents.map((document) => (
-            <div
-              key={document.id}
-              className="rounded-lg border border-[var(--line)] bg-white px-3 py-2.5 transition hover:border-[#cbd3de] hover:shadow-sm"
-            >
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-[var(--ink)]">{document.title}</p>
-                  <p className="mt-0.5 text-xs text-[var(--ink-muted)]">
-                    {document.type}
-                    {document.loanId ? ` · loan ${document.loanId}` : " · organization level"}
-                  </p>
-                </div>
-                <Button
-                  className="h-8 rounded-lg px-2.5 text-xs"
-                  variant="ghost"
-                  onClick={() => onApplyPromptFromDocument(document)}
-                >
-                  Ask advisor
-                </Button>
-              </div>
-              <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-[var(--ink-soft)]">
-                {document.summary}
-              </p>
+          <div className="flex flex-wrap gap-2">
+            <div className="relative min-w-[180px] flex-1">
+              <Icon
+                name="search"
+                className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ink-muted)]"
+              />
+              <Input
+                className="h-8 rounded-lg pl-8 pr-3 text-xs"
+                value={documentSearch}
+                onChange={(event) => setDocumentSearch(event.target.value)}
+                placeholder="Search title or summary"
+              />
             </div>
-          ))}
+            <Select
+              className="h-8 w-auto min-w-[160px] rounded-lg px-2.5 text-xs"
+              value={documentTypeFilter}
+              onChange={(event) =>
+                setDocumentTypeFilter(
+                  event.target.value as (typeof documentTypeFilters)[number]["value"],
+                )
+              }
+            >
+              {documentTypeFilters.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
           </div>
+          {filteredDocuments.length > 0 ? (
+            <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+            {filteredDocuments.map((document) => (
+              <div
+                key={document.id}
+                className="rounded-lg border border-[var(--line)] bg-white px-3 py-2.5 transition hover:border-[#cbd3de] hover:shadow-sm"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-[var(--ink)]">{document.title}</p>
+                    <p className="mt-0.5 text-xs text-[var(--ink-muted)]">
+                      {document.type}
+                      {document.loanId ? ` · loan ${document.loanId}` : " · organization level"}
+                    </p>
+                  </div>
+                  <Button
+                    className="h-8 rounded-lg px-2.5 text-xs"
+                    variant="ghost"
+                    onClick={() => onApplyPromptFromDocument(document)}
+                  >
+                    Ask advisor
+                  </Button>
+                </div>
+                <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-[var(--ink-soft)]">
+                  {document.summary}
+                </p>
+              </div>
+            ))}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed border-[var(--line)] bg-[var(--panel)] px-4 py-6 text-center">
+              <p className="text-sm font-semibold text-[var(--ink)]">No documents match your filters</p>
+              <p className="mt-1 text-sm text-[var(--ink-muted)]">Try a different search term or document type.</p>
+            </div>
+          )}
         </div>
       ) : (
         <div className={`rounded-lg border border-dashed border-[var(--line)] bg-[var(--panel)] px-4 py-6 text-center ${ingestionJobs.length === 0 ? "lg:col-span-2" : ""}`}>
