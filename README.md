@@ -1,36 +1,94 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Cresflo AI Advisor — Frontend
 
-## Getting Started
+Next.js console for the Cresflo AI Advisor prototype. It exercises the full backend flow: superadmin and organization authentication, organization/user provisioning, document ingestion for retrieval, and a WebSocket-streamed advisor chat.
 
-First, run the development server:
+This app is a thin client over the [`cresflo-backend`](../cresflo-backend) API — it has no server-side business logic of its own; every dashboard section maps to a backend capability described in that repo's design doc.
+
+## Tech stack
+
+- [Next.js 16](https://nextjs.org) (App Router, Turbopack)
+- React 19
+- Tailwind CSS 4
+- Plain `fetch`/`WebSocket` against the backend — no data-fetching or state library
+
+## Prerequisites
+
+- Node.js 20+ (or Bun, which this repo is set up to use — see `bun.lock`)
+- The [`cresflo-backend`](../cresflo-backend) running locally (Postgres + pgvector, Redis, and the Express API). See that repo's README for setup.
+
+## Getting started
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+bun install        # or npm install / pnpm install
+bun dev             # or npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000). Unauthenticated visits redirect to `/login`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment variables
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Create `.env.local` (or edit `.env`):
 
-## Learn More
+```bash
+NEXT_PUBLIC_BACKEND_URL=http://localhost:3004
+```
 
-To learn more about Next.js, take a look at the following resources:
+This is the base URL the frontend calls for both HTTP requests (`lib/api.ts`) and the advisor WebSocket (`ws://…/ws/advisor`). It defaults to `http://localhost:3000` if unset, so set it explicitly whenever the backend runs on a different port than the frontend.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Scripts
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| Command | Description |
+| --- | --- |
+| `dev` | Start the dev server with Turbopack |
+| `build` | Production build |
+| `start` | Serve the production build |
+| `lint` | Run ESLint |
 
-## Deploy on Vercel
+## Project structure
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```text
+app/
+  login/                    organization sign-in
+  superadmin/login/         superadmin sign-in
+  dashboard/                authenticated shell, one route per section
+    overview/ access/ organizations/ users/
+    documents/ advisor-chat/ diagnostics/
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+components/
+  advisor/
+    workbench/               dashboard shell + state (see below)
+    auth-portal.tsx          shared login screen (superadmin/organization)
+    document-ingestion-panel.tsx
+    advisor-chat-panel.tsx
+    organization-panel.tsx, organization-user-panel.tsx, ...
+  ui/                        design-system primitives (button, card, field, icon, select, ...)
+
+lib/
+  api.ts                     typed fetch calls to the backend
+  session-storage.ts         localStorage-backed session persistence
+  types.ts                   shared API/domain types
+```
+
+### `components/advisor/workbench/`
+
+The dashboard's data layer and shell, split by responsibility:
+
+- `context.tsx` — `DashboardProvider`/`useDashboardContext`: all dashboard state, API calls, and the advisor WebSocket connection
+- `shell.tsx` — sidebar, header, and the authenticated/unauthenticated page chrome
+- `route-layout.tsx` — wires the provider and shell together for `app/dashboard/layout.tsx`
+- `pages/*.tsx` — one component per dashboard route (`overview`, `access`, `organizations`, `users`, `documents`, `advisor-chat`, `diagnostics`)
+- `index.tsx` — barrel export consumed by `app/dashboard/**/page.tsx`
+
+## Auth model
+
+Two independent session types, each persisted separately in `localStorage` via `lib/session-storage.ts`:
+
+- **Superadmin** — logs in at `/superadmin/login`, can create organizations and organization users, manage documents for any organization.
+- **Organization user** — logs in at `/login`, scoped to one tenant; `admin` role can manage that organization's documents, all roles can use advisor chat.
+
+Both sessions can be held at once (e.g. for testing), and the dashboard header exposes a switcher when that happens. The active view determines which sidebar sections and data are shown — see `isSuperadminView` / `isOrganizationView` in `context.tsx`.
+
+## Notes
+
+- There is no build-time or runtime validation that `NEXT_PUBLIC_BACKEND_URL` points at a reachable backend — connection and auth failures surface as inline error banners and a `Disconnected`/`Error` chat connection state.
+- The advisor chat WebSocket reconnects manually (via the "Reconnect" action in the chat panel), not automatically.
