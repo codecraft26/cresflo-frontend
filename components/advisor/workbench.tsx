@@ -297,6 +297,7 @@ function DashboardProvider({
     getServerHydrationSnapshot,
   );
   const [backendUrl] = useState(() => readStoredBackendUrl(defaultBackendUrl));
+  const router = useRouter();
   const [activeRole, setActiveRole] = useState<DashboardRole | null>(() =>
     readStoredRole(),
   );
@@ -746,6 +747,7 @@ function DashboardProvider({
   }, [organizationSession?.accessToken]);
 
   const superadminLogout = () => {
+    clearStoredSuperadminSession();
     setSuperadminSession(null);
     setSuperadminProfile(null);
     setOrganizations([]);
@@ -759,9 +761,11 @@ function DashboardProvider({
       setActiveRole(null);
     }
     appendLog("Cleared superadmin session");
+    router.replace("/superadmin/login");
   };
 
   const organizationLogout = () => {
+    clearStoredOrganizationSession();
     socketRef.current?.close();
     setOrganizationSession(null);
     setOrganizationProfile(null);
@@ -777,6 +781,7 @@ function DashboardProvider({
       setActiveRole(null);
     }
     appendLog("Cleared organization session");
+    router.replace("/login");
   };
 
   const selectedOrganization = organizations.find(
@@ -1702,6 +1707,7 @@ function DashboardDocumentsPage() {
         }}
         isSubmitting={isSubmitting}
         canManage={canManageDocuments}
+        isOrganizationLocked={isOrganizationAdmin}
         onOrganizationSelect={(organizationId) => {
           if (isOrganizationAdmin) {
             return;

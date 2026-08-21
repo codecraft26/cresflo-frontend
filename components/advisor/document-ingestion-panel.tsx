@@ -20,6 +20,7 @@ function DocumentIngestionPanel({
   form,
   isSubmitting,
   canManage,
+  isOrganizationLocked,
   onOrganizationSelect,
   onFormChange,
   onIngest,
@@ -44,6 +45,7 @@ function DocumentIngestionPanel({
   };
   isSubmitting: boolean;
   canManage: boolean;
+  isOrganizationLocked: boolean;
   onOrganizationSelect: (organizationId: string) => void;
   onFormChange: (
     field:
@@ -77,6 +79,7 @@ function DocumentIngestionPanel({
           <Select
             className="h-9 rounded-lg px-3 text-xs"
             value={selectedOrganizationId}
+            disabled={isOrganizationLocked}
             onChange={(event) => onOrganizationSelect(event.target.value)}
           >
             <option value="">Select organization</option>
