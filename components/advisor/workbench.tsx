@@ -9,6 +9,7 @@ import {
   useEffectEvent,
   useRef,
   useState,
+  useSyncExternalStore,
   type PropsWithChildren,
   type ReactNode,
 } from "react";
@@ -72,6 +73,10 @@ import type {
 
 const defaultBackendUrl =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3000";
+
+const subscribeToHydration = () => () => undefined;
+const getClientHydrationSnapshot = () => true;
+const getServerHydrationSnapshot = () => false;
 
 const sectionConfig = {
   overview: {
@@ -257,6 +262,11 @@ function DashboardProvider({
 }: PropsWithChildren<{
   activeSection: DashboardSectionKey;
 }>) {
+  const hasHydrated = useSyncExternalStore(
+    subscribeToHydration,
+    getClientHydrationSnapshot,
+    getServerHydrationSnapshot,
+  );
   const [backendUrl] = useState(() => readStoredBackendUrl(defaultBackendUrl));
   const [activeRole, setActiveRole] = useState<DashboardRole | null>(() =>
     readStoredRole(),
@@ -754,7 +764,30 @@ function DashboardProvider({
     setErrorMessage,
   };
 
-  return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;
+  return (
+    <DashboardContext.Provider value={value}>
+      {hasHydrated ? children : <DashboardHydrationFallback />}
+    </DashboardContext.Provider>
+  );
+}
+
+function DashboardHydrationFallback() {
+  return (
+    <div className="min-h-screen bg-[var(--paper)]">
+      <div className="h-16 border-b border-[var(--line)] bg-white lg:h-20" />
+      <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6">
+        <div className="animate-pulse space-y-5" aria-label="Loading dashboard">
+          <div className="h-8 w-48 rounded-lg bg-[var(--panel-strong)]" />
+          <div className="h-4 w-80 max-w-full rounded bg-[var(--panel-strong)]" />
+          <div className="grid gap-4 pt-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[0, 1, 2, 3].map((item) => (
+              <div key={item} className="h-36 rounded-2xl border border-[var(--line)] bg-white" />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function DashboardSidebar() {
